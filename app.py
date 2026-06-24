@@ -240,6 +240,19 @@ def items_delete():
     return jsonify(payload())
 
 
+def _reorder(items, order):
+    pos = {i: n for n, i in enumerate(order)}
+    seq = iter(sorted([it for it in items if it.get("id") in pos], key=lambda it: pos[it["id"]]))
+    return [next(seq) if it.get("id") in pos else it for it in items]
+
+
+@app.route("/api/items/reorder", methods=["POST"])
+def items_reorder():
+    d = request.get_json(silent=True) or {}
+    write_items(_reorder(read_items(), d.get("order") or []))
+    return jsonify(payload())
+
+
 @app.route("/api/items/clear", methods=["POST"])
 def items_clear():
     items = read_items()
@@ -432,6 +445,10 @@ PAGE = r"""<!doctype html>
     .item { display:flex; align-items:center; gap:.7rem; background:var(--card); border:1px solid var(--border);
       border-radius:12px; box-shadow:var(--shadow); padding:.55rem .8rem; margin-bottom:.45rem; }
     .item.on { border-color:var(--accent); background:var(--accent-bg); }
+    .item.dragging { opacity:.6; }
+    .ihandle { cursor:grab; color:var(--muted); opacity:.5; font-size:1.05rem; letter-spacing:-2px;
+      padding:.1rem .25rem; touch-action:none; user-select:none; -webkit-user-select:none; }
+    .ihandle:hover { opacity:.95; }
     .item .info { flex:1; min-width:0; }
     .item .nome { font-weight:700; cursor:text; border-radius:6px; padding:.05rem .2rem; }
     .item .nome:hover { background:rgba(127,127,127,.12); }
@@ -589,7 +606,7 @@ PAGE = r"""<!doctype html>
       <button class="sb" data-q="${it.id}|1">+</button></div>`;
   }
   function row(it) {
-    return `<div class="item ${it.qtd > 0 ? 'on' : ''}">
+    return `<div class="item ${it.qtd > 0 ? 'on' : ''}" data-item="${it.id}">
       <div class="info"><span class="nome" data-edit="${it.id}">${esc(it.nome)}</span></div>
       ${stepHTML(it)}<button class="x" data-del="${it.id}" title="remover">✕</button></div>`;
   }
@@ -652,8 +669,7 @@ PAGE = r"""<!doctype html>
         box.innerHTML = html;
       }
     } else {
-      let list = data.items.filter(i => i.cat === aCat && i.sub === aSub && (!term || fold(i.nome).includes(term)));
-      list.sort((a, b) => ((b.qtd > 0) - (a.qtd > 0)) || a.nome.localeCompare(b.nome, 'pt'));
+      const list = data.items.filter(i => i.cat === aCat && i.sub === aSub && (!term || fold(i.nome).includes(term)));
       box.innerHTML = list.length ? list.map(row).join('') : '<div class="empty">Sem itens aqui. Adiciona acima 👆</div>';
     }
     box.querySelectorAll('[data-q]').forEach(b => b.onclick = () => { const [id, dl] = b.dataset.q.split('|'); api('/api/items/qty', { id, delta: Number(dl) }); });
@@ -662,6 +678,37 @@ PAGE = r"""<!doctype html>
     box.querySelectorAll('[data-jump]').forEach(el => el.onclick = () => { const [c, s] = el.dataset.jump.split('|'); aCat = c; aSub = s; mode = 'cat'; render(); });
     box.querySelectorAll('[data-del]').forEach(b => b.onclick = () => api('/api/items/delete', { id: b.dataset.del }));
     box.querySelectorAll('.nome[data-edit]').forEach(s => s.onclick = () => startEdit(s, s.dataset.edit));
+    if (mode !== 'lista' && !term) sortItems(box, order => api('/api/items/reorder', { order }));
+  }
+
+  // arrastar itens (pela pega ⠿) para reordenar dentro da secção
+  function sortItems(container, onReorder) {
+    container.querySelectorAll('[data-item]').forEach(el => {
+      el.insertAdjacentHTML('afterbegin', '<span class="ihandle" aria-hidden="true">⠿</span>');
+      const h = el.querySelector('.ihandle');
+      h.addEventListener('pointerdown', e => {
+        if (e.button) return;
+        let moved = false; const sy = e.clientY, sx = e.clientX;
+        const move = ev => {
+          if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return;
+          if (!moved) { moved = true; paused = true; el.classList.add('dragging'); try { h.setPointerCapture(ev.pointerId); } catch (_) {} }
+          ev.preventDefault();
+          let best = null, bd = Infinity;
+          container.querySelectorAll('[data-item]:not(.dragging)').forEach(o => {
+            const r = o.getBoundingClientRect(), cy = r.top + r.height / 2;
+            const d = Math.abs(ev.clientY - cy); if (d < bd) { bd = d; best = { o, cy }; }
+          });
+          if (best) container.insertBefore(el, ev.clientY < best.cy ? best.o : best.o.nextSibling);
+        };
+        const up = () => {
+          document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up);
+          if (moved) { el.classList.remove('dragging');
+            onReorder([...container.querySelectorAll('[data-item]')].map(x => x.getAttribute('data-item')));
+          } else { paused = false; }
+        };
+        document.addEventListener('pointermove', move); document.addEventListener('pointerup', up);
+      });
+    });
   }
 
   $('cartbtn').onclick = () => { mode = mode === 'lista' ? 'cat' : 'lista'; render(); };

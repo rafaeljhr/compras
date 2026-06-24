@@ -707,7 +707,7 @@ PAGE = r"""<!doctype html>
   }
 
   load();
-  setInterval(load, 15000);
+  setInterval(load, 4000);  // auto-refresh em segundo plano (tempo quase real entre pessoas)
 </script>
 </body>
 </html>"""

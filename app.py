@@ -195,6 +195,22 @@ def items_qty():
     for it in items:
         if it.get("id") == item_id:
             it["qtd"] = max(0, int(it.get("qtd", 0)) + delta)
+            if it["qtd"] == 0:
+                it["comprado"] = False  # fora da lista -> deixa de estar "comprado"
+            break
+    write_items(items)
+    return jsonify(payload())
+
+
+@app.route("/api/items/bought", methods=["POST"])
+def items_bought():
+    d = request.get_json(silent=True) or {}
+    item_id = (d.get("id") or "").strip()
+    val = bool(d.get("comprado"))
+    items = read_items()
+    for it in items:
+        if it.get("id") == item_id:
+            it["comprado"] = val
             break
     write_items(items)
     return jsonify(payload())
@@ -229,6 +245,7 @@ def items_clear():
     items = read_items()
     for it in items:
         it["qtd"] = 0
+        it["comprado"] = False
     write_items(items)
     return jsonify(payload())
 
@@ -429,6 +446,13 @@ PAGE = r"""<!doctype html>
     .num.pos { color:var(--accent); }
     .act.done { border:1px solid var(--green); color:#fff; background:var(--green); border-radius:9px;
       padding:.45rem .65rem; cursor:pointer; font-weight:800; }
+    .act.undo { border:1px solid var(--border); background:var(--card); color:var(--muted); border-radius:9px;
+      padding:.45rem .65rem; cursor:pointer; font-weight:800; }
+    .info.jump { cursor:pointer; }
+    .info.jump:hover .nome { color:var(--accent); text-decoration:underline; }
+    .item.bought { opacity:.55; }
+    .item.bought .nome { text-decoration:line-through; font-weight:700; }
+    .grouptitle.done { color:var(--green); margin-top:1.3rem; }
     .x { border:none; background:none; color:var(--muted); cursor:pointer; font-size:1.1rem; padding:.2rem .3rem; }
     .x:hover { color:#d24b3a; }
     .grouptitle { font-size:.82rem; color:var(--muted); text-transform:uppercase; letter-spacing:.04em;
@@ -569,12 +593,25 @@ PAGE = r"""<!doctype html>
       <div class="info"><span class="nome" data-edit="${it.id}">${esc(it.nome)}</span></div>
       ${stepHTML(it)}<button class="x" data-del="${it.id}" title="remover">✕</button></div>`;
   }
-  function rowLista(it) {
+  function pathLabel(it) {
     const c = data.cats.find(x => x.key === it.cat);
     const s = c && c.subs.find(x => x.key === it.sub);
-    return `<div class="item on"><div class="info"><span class="nome" data-edit="${it.id}">${esc(it.nome)}</span>
-      <div class="meta">${s ? esc(s.label) : ''}</div></div>${stepHTML(it)}
-      <button class="act done" data-buy="${it.id}|${it.qtd}" title="comprado">✓</button></div>`;
+    return (c ? c.icone + ' ' + esc(c.label) : '') + (s ? ' › ' + esc(s.label) : '');
+  }
+  function rowAComprar(it) {  // ativo na lista "a comprar"
+    return `<div class="item on">
+      <div class="info jump" data-jump="${it.cat}|${it.sub}"><span class="nome">${esc(it.nome)}</span>
+        <div class="meta">${pathLabel(it)} ›</div></div>
+      ${stepHTML(it)}
+      <button class="act done" data-bought="${it.id}" title="marcar como comprado">✓</button>
+      <button class="x" data-del="${it.id}" title="remover produto">✕</button></div>`;
+  }
+  function rowComprado(it) {  // já comprado (grey out)
+    return `<div class="item bought">
+      <div class="info jump" data-jump="${it.cat}|${it.sub}"><span class="nome">${esc(it.nome)}</span>
+        <div class="meta">${pathLabel(it)}</div></div>
+      <button class="act undo" data-unbought="${it.id}" title="repor na lista">↩</button>
+      <button class="x" data-del="${it.id}" title="remover produto">✕</button></div>`;
   }
   function startEdit(span, id) {
     const cur = span.textContent;
@@ -602,18 +639,27 @@ PAGE = r"""<!doctype html>
     const box = $('list');
     if (mode === 'lista') {
       const f = buy.filter(i => !term || fold(i.nome).includes(term));
-      if (!f.length) box.innerHTML = '<div class="empty">🛒 Lista vazia. Marca o que precisas nas categorias.</div>';
-      else box.innerHTML = data.cats.map(c => {
-        const sub = f.filter(i => i.cat === c.key);
-        return sub.length ? `<div class="grouptitle">${c.icone} ${esc(c.label)}</div>` + sub.map(rowLista).join('') : '';
-      }).join('');
+      const act = f.filter(i => !i.comprado), done = f.filter(i => i.comprado);
+      if (!act.length && !done.length) {
+        box.innerHTML = '<div class="empty">🛒 Lista vazia. Marca o que precisas nas categorias.</div>';
+      } else {
+        let html = data.cats.map(c => {
+          const sub = act.filter(i => i.cat === c.key);
+          return sub.length ? `<div class="grouptitle">${c.icone} ${esc(c.label)}</div>` + sub.map(rowAComprar).join('') : '';
+        }).join('');
+        if (!act.length) html += '<div class="empty">Tudo comprado! 🎉</div>';
+        if (done.length) html += `<div class="grouptitle done">✓ Já comprado (${done.length})</div>` + done.map(rowComprado).join('');
+        box.innerHTML = html;
+      }
     } else {
       let list = data.items.filter(i => i.cat === aCat && i.sub === aSub && (!term || fold(i.nome).includes(term)));
       list.sort((a, b) => ((b.qtd > 0) - (a.qtd > 0)) || a.nome.localeCompare(b.nome, 'pt'));
       box.innerHTML = list.length ? list.map(row).join('') : '<div class="empty">Sem itens aqui. Adiciona acima 👆</div>';
     }
     box.querySelectorAll('[data-q]').forEach(b => b.onclick = () => { const [id, dl] = b.dataset.q.split('|'); api('/api/items/qty', { id, delta: Number(dl) }); });
-    box.querySelectorAll('[data-buy]').forEach(b => b.onclick = () => { const [id, q] = b.dataset.buy.split('|'); api('/api/items/qty', { id, delta: -Number(q) }); });
+    box.querySelectorAll('[data-bought]').forEach(b => b.onclick = () => api('/api/items/bought', { id: b.dataset.bought, comprado: true }));
+    box.querySelectorAll('[data-unbought]').forEach(b => b.onclick = () => api('/api/items/bought', { id: b.dataset.unbought, comprado: false }));
+    box.querySelectorAll('[data-jump]').forEach(el => el.onclick = () => { const [c, s] = el.dataset.jump.split('|'); aCat = c; aSub = s; mode = 'cat'; render(); });
     box.querySelectorAll('[data-del]').forEach(b => b.onclick = () => api('/api/items/delete', { id: b.dataset.del }));
     box.querySelectorAll('.nome[data-edit]').forEach(s => s.onclick = () => startEdit(s, s.dataset.edit));
   }

@@ -445,7 +445,8 @@ PAGE = r"""<!doctype html>
     .item { display:flex; align-items:center; gap:.7rem; background:var(--card); border:1px solid var(--border);
       border-radius:12px; box-shadow:var(--shadow); padding:.55rem .8rem; margin-bottom:.45rem; }
     .item.on { border-color:var(--accent); background:var(--accent-bg); }
-    .item.dragging { opacity:.6; }
+    .item.dragging { opacity:.98; box-shadow:0 10px 26px rgba(0,0,0,.32); position:relative; z-index:20; }
+    body.dragging-on { user-select:none; -webkit-user-select:none; cursor:grabbing; }
     .ihandle { cursor:grab; color:var(--muted); opacity:.5; font-size:1.05rem; letter-spacing:-2px;
       padding:.1rem .25rem; touch-action:none; user-select:none; -webkit-user-select:none; }
     .ihandle:hover { opacity:.95; }
@@ -543,17 +544,23 @@ PAGE = r"""<!doctype html>
   function load() { if (paused) return; fetch('/api/data').then(r => r.json()).then(p => { data = p; fixActive(); render(); }); }
 
   // ---- popover menu ----
-  function closeMenu() { document.querySelectorAll('.popmenu').forEach(m => m.remove()); paused = false; }
+  let _menuCloser = null;
+  function closeMenu() {
+    document.querySelectorAll('.popmenu').forEach(m => m.remove());
+    if (_menuCloser) { document.removeEventListener('pointerdown', _menuCloser, true); _menuCloser = null; }
+    paused = false;
+  }
   function openMenu(btn, opts) {
     closeMenu(); paused = true;
     const m = document.createElement('div'); m.className = 'popmenu';
     opts.forEach(o => { const b = document.createElement('button'); b.textContent = o.label;
-      b.onclick = e => { e.stopPropagation(); closeMenu(); o.fn(); }; m.appendChild(b); });
+      b.onclick = e => { e.stopPropagation(); o.fn(); closeMenu(); }; m.appendChild(b); });
     document.body.appendChild(m);
     const r = btn.getBoundingClientRect();
     m.style.left = (window.scrollX + Math.min(r.left, innerWidth - m.offsetWidth - 8)) + 'px';
     m.style.top = (window.scrollY + r.bottom + 4) + 'px';
-    setTimeout(() => document.addEventListener('pointerdown', closeMenu, { once: true, capture: true }), 0);
+    _menuCloser = e => { if (!e.target.closest('.popmenu')) closeMenu(); };
+    setTimeout(() => document.addEventListener('pointerdown', _menuCloser, true), 0);
   }
 
   // ---- tabs ----
@@ -688,10 +695,12 @@ PAGE = r"""<!doctype html>
       const h = el.querySelector('.ihandle');
       h.addEventListener('pointerdown', e => {
         if (e.button) return;
-        let moved = false; const sy = e.clientY, sx = e.clientX;
+        e.preventDefault();
+        const sx = e.clientX, sy = e.clientY; let moved = false;
         const move = ev => {
           if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return;
-          if (!moved) { moved = true; paused = true; el.classList.add('dragging'); try { h.setPointerCapture(ev.pointerId); } catch (_) {} }
+          if (!moved) { moved = true; paused = true; document.body.classList.add('dragging-on');
+            el.classList.add('dragging'); try { h.setPointerCapture(ev.pointerId); } catch (_) {} }
           ev.preventDefault();
           let best = null, bd = Infinity;
           container.querySelectorAll('[data-item]:not(.dragging)').forEach(o => {
@@ -699,9 +708,13 @@ PAGE = r"""<!doctype html>
             const d = Math.abs(ev.clientY - cy); if (d < bd) { bd = d; best = { o, cy }; }
           });
           if (best) container.insertBefore(el, ev.clientY < best.cy ? best.o : best.o.nextSibling);
+          el.style.transform = '';
+          const r = el.getBoundingClientRect();
+          el.style.transform = `translateY(${ev.clientY - (r.top + r.height / 2)}px)`;
         };
         const up = () => {
           document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up);
+          document.body.classList.remove('dragging-on'); el.style.transform = '';
           if (moved) { el.classList.remove('dragging');
             onReorder([...container.querySelectorAll('[data-item]')].map(x => x.getAttribute('data-item')));
           } else { paused = false; }

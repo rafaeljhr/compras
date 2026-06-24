@@ -1,0 +1,24 @@
+# Lista de Compras — corre no porto 8003.
+#   docker compose up -d --build
+# Aceder em:  http://<ip-do-pi>:8003
+services:
+  compras:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: compras
+    restart: unless-stopped
+    ports:
+      - "8003:8003"
+    environment:
+      - DATA_DIR=/data
+    volumes:
+      - data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  data:

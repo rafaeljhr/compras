@@ -422,7 +422,7 @@ PAGE = r"""<!doctype html>
     .tabs.cat .tab { font-size:.9rem; padding:.45rem .7rem; }
     .tabs.sub .tab { font-size:.82rem; padding:.35rem .6rem; }
     .tab.on { background:var(--accent); color:#fff; border-color:var(--accent); }
-    .tab.dragging { opacity:.55; cursor:grabbing; }
+    .tab.dragging { opacity:.9; cursor:grabbing; box-shadow:0 10px 26px rgba(0,0,0,.3); z-index:30; position:relative; }
     .tab .grip { opacity:.4; margin-right:.05rem; font-size:.95em; letter-spacing:-2px; }
     .tab.on .grip { opacity:.8; }
     .tab .tmenu { border:none; background:none; color:inherit; cursor:pointer; opacity:.55; font-weight:800;
@@ -738,10 +738,12 @@ PAGE = r"""<!doctype html>
       el.insertAdjacentHTML('afterbegin', '<span class="grip" aria-hidden="true">⠿</span>');
       el.addEventListener('pointerdown', e => {
         if (e.button || (e.target.closest && e.target.closest('.tmenu'))) return;
+        e.preventDefault();
         const sx = e.clientX, sy = e.clientY; let moved = false; const addtab = container.querySelector('.addtab');
         const move = ev => {
           if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 8) return;
-          if (!moved) { moved = true; paused = true; el.classList.add('dragging'); try { el.setPointerCapture(ev.pointerId); } catch (_) {} }
+          if (!moved) { moved = true; paused = true; document.body.classList.add('dragging-on');
+            el.classList.add('dragging'); try { el.setPointerCapture(ev.pointerId); } catch (_) {} }
           ev.preventDefault();
           let best = null, bd = Infinity;
           container.querySelectorAll('[' + attr + ']:not(.dragging)').forEach(o => {
@@ -750,9 +752,13 @@ PAGE = r"""<!doctype html>
           });
           if (best) container.insertBefore(el, ev.clientX < best.cx ? best.o : best.o.nextSibling);
           if (addtab) container.appendChild(addtab);
+          el.style.transform = '';
+          const r = el.getBoundingClientRect();
+          el.style.transform = `translate(${ev.clientX - (r.left + r.width / 2)}px, ${ev.clientY - (r.top + r.height / 2)}px)`;
         };
         const up = () => {
           document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up);
+          document.body.classList.remove('dragging-on'); el.style.transform = '';
           if (moved) { el.classList.remove('dragging');
             const order = [...container.querySelectorAll('[' + attr + ']')].map(x => x.getAttribute(attr));
             const sw = c => { c.stopPropagation(); c.preventDefault(); };

@@ -27,6 +27,8 @@ ITEMS_FILE = DATA_DIR / "items.json"
 STRUCT_FILE = DATA_DIR / "structure.json"
 # Itens marcados como comprados saem da lista sozinhos ao fim de 24h.
 BOUGHT_TTL = 24 * 3600
+# Muda a cada deploy: as paginas abertas detectam e recarregam-se sozinhas.
+VERSION = "2026-08-30-c3"
 
 DEFAULT_CATS = [
     {"key": "fl", "label": "Frutas & Legumes", "icone": "🥦", "subs": [
@@ -184,7 +186,7 @@ def payload():
     items = read_items()
     if _expire_bought(items):
         write_items(items)
-    return {"cats": read_structure(), "items": items}
+    return {"cats": read_structure(), "items": items, "ver": VERSION}
 
 
 @app.after_request
@@ -556,7 +558,7 @@ PAGE = r"""<!doctype html>
   <input id="q" class="search" type="search" autocomplete="off" placeholder="🔎 Pesquisar produto…">
   <div id="list"></div>
 
-  <footer>Ajusta a quantidade com −/＋. Clica no nome de um produto para o editar (guarda ao sair).<br>
+  <footer><span id="ver" style="opacity:.5">v{{ ver }}</span> · Ajusta a quantidade com −/＋. Clica no nome de um produto para o editar (guarda ao sair).<br>
     Os ⋮ editam/eliminam tabs; o ＋ adiciona. Arrasta (⠿) para reordenar. Sincroniza sozinho.</footer>
 </div>
 
@@ -573,6 +575,16 @@ PAGE = r"""<!doctype html>
     const c = catObj();
     if (c && !c.subs.find(s => s.key === aSub)) aSub = c.subs[0] ? c.subs[0].key : null;
   }
+  const VER = "{{ ver }}";
+  // Houve deploy: esta página está velha. Recarrega uma única vez por versão
+  // (a flag evita um ciclo infinito se o browser insistir na cópia em cache).
+  function bumpVersion(nova) {
+    try {
+      if (sessionStorage.getItem('v') === nova) return;
+      sessionStorage.setItem('v', nova);
+    } catch (_) {}
+    location.reload();
+  }
   let seq = 0;  // descarta respostas do refresh que cheguem depois de uma alteração nossa
   async function api(path, body) {
     paused = true;
@@ -587,6 +599,7 @@ PAGE = r"""<!doctype html>
     const my = ++seq;
     fetch('/api/data').then(r => r.json()).then(p => {
       if (my !== seq || paused) return;  // já há algo mais recente -> ignora
+      if (p.ver && p.ver !== VER) return bumpVersion(p.ver);
       data = p; fixActive(); render();
     });
   }
@@ -830,7 +843,7 @@ PAGE = r"""<!doctype html>
 
 @app.route("/")
 def index():
-    return render_template_string(PAGE)
+    return render_template_string(PAGE, ver=VERSION)
 
 
 if __name__ == "__main__":

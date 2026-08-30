@@ -187,6 +187,15 @@ def payload():
     return {"cats": read_structure(), "items": items}
 
 
+@app.after_request
+def _no_cache(resp):
+    # A página e os dados nunca podem vir da cache: senão o telemóvel fica preso
+    # a uma versão antiga do HTML/JS depois de um deploy. O ícone pode cachar.
+    if request.path != "/apple-touch-icon.png":
+        resp.headers["Cache-Control"] = "no-store, must-revalidate"
+    return resp
+
+
 @app.route("/api/data")
 def api_data():
     return jsonify(payload())

@@ -10,8 +10,11 @@ A ideia: em vez de reescrever sempre (como nos lembretes), os produtos ficam num
 para a próxima.
 
 - Separadores **arrastáveis** (⠿) — a ordem fica guardada por dispositivo.
-- **Badges** mostram quantos itens estão na lista por categoria/subcategoria.
-- Estado guardado no servidor (volume `/data`) e sincroniza sozinho (~15s).
+- **Badges** mostram quantos itens **falta comprar** por categoria/subcategoria
+  (o que já marcaste como comprado deixa de contar).
+- No 🛒, o **✓** manda o item para a lista riscada de "já comprado"; ao fim de **24h**
+  sai sozinho da lista (o produto continua no catálogo). O **↩** repõe-no logo.
+- Estado guardado no servidor (volume `/data`) e sincroniza sozinho (~4s).
 
 ## Correr localmente
 ```bash

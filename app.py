@@ -12,6 +12,7 @@ import base64
 import json
 import os
 import tempfile
+import time
 import unicodedata
 import uuid
 from pathlib import Path
@@ -24,6 +25,8 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).with_name("data")))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 ITEMS_FILE = DATA_DIR / "items.json"
 STRUCT_FILE = DATA_DIR / "structure.json"
+# Itens marcados como comprados saem da lista sozinhos ao fim de 24h.
+BOUGHT_TTL = 24 * 3600
 
 DEFAULT_CATS = [
     {"key": "fl", "label": "Frutas & Legumes", "icone": "🥦", "subs": [
@@ -160,8 +163,28 @@ def _valid(cats, cat, sub):
     return bool(c and any(s["key"] == sub for s in c["subs"]))
 
 
+def _expire_bought(items):
+    """Tira da lista os itens comprados há mais de 24h. Devolve True se mudou algo."""
+    now, changed = time.time(), False
+    for it in items:
+        if not it.get("comprado"):
+            continue
+        ts = it.get("comprado_em")
+        if not isinstance(ts, (int, float)):
+            it["comprado_em"] = now  # item antigo sem carimbo: conta as 24h a partir de agora
+            changed = True
+        elif now - ts >= BOUGHT_TTL:
+            it["qtd"], it["comprado"] = 0, False  # o produto fica no catálogo, sai só da lista
+            it.pop("comprado_em", None)
+            changed = True
+    return changed
+
+
 def payload():
-    return {"cats": read_structure(), "items": read_items()}
+    items = read_items()
+    if _expire_bought(items):
+        write_items(items)
+    return {"cats": read_structure(), "items": items}
 
 
 @app.route("/api/data")
@@ -178,7 +201,8 @@ def items_add():
     if not nome or not _valid(read_structure(), cat, sub):
         return jsonify({"ok": False}), 400
     items = read_items()
-    items.append({"id": _key() + _key(), "nome": nome, "cat": cat, "sub": sub, "qtd": 1})
+    items.append({"id": _key() + _key(), "nome": nome, "cat": cat, "sub": sub, "qtd": 1,
+                  "comprado": False})
     write_items(items)
     return jsonify(payload())
 
@@ -195,8 +219,10 @@ def items_qty():
     for it in items:
         if it.get("id") == item_id:
             it["qtd"] = max(0, int(it.get("qtd", 0)) + delta)
-            if it["qtd"] == 0:
-                it["comprado"] = False  # fora da lista -> deixa de estar "comprado"
+            # voltar a pedir (ou sair da lista) limpa o "comprado"
+            if delta > 0 or it["qtd"] == 0:
+                it["comprado"] = False
+                it.pop("comprado_em", None)
             break
     write_items(items)
     return jsonify(payload())
@@ -211,6 +237,10 @@ def items_bought():
     for it in items:
         if it.get("id") == item_id:
             it["comprado"] = val
+            if val:
+                it["comprado_em"] = time.time()  # marca a hora -> sai da lista em 24h
+            else:
+                it.pop("comprado_em", None)
             break
     write_items(items)
     return jsonify(payload())
@@ -259,6 +289,7 @@ def items_clear():
     for it in items:
         it["qtd"] = 0
         it["comprado"] = False
+        it.pop("comprado_em", None)
     write_items(items)
     return jsonify(payload())
 
@@ -533,15 +564,23 @@ PAGE = r"""<!doctype html>
     const c = catObj();
     if (c && !c.subs.find(s => s.key === aSub)) aSub = c.subs[0] ? c.subs[0].key : null;
   }
+  let seq = 0;  // descarta respostas do refresh que cheguem depois de uma alteração nossa
   async function api(path, body) {
     paused = true;
     try {
       const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
       data = await r.json();
-    } finally { paused = false; }
+    } finally { ++seq; paused = false; }  // invalida refreshes em voo
     fixActive(); render();
   }
-  function load() { if (paused) return; fetch('/api/data').then(r => r.json()).then(p => { data = p; fixActive(); render(); }); }
+  function load() {
+    if (paused) return;
+    const my = ++seq;
+    fetch('/api/data').then(r => r.json()).then(p => {
+      if (my !== seq || paused) return;  // já há algo mais recente -> ignora
+      data = p; fixActive(); render();
+    });
+  }
 
   // ---- popover menu ----
   let _menuCloser = null;
@@ -570,7 +609,7 @@ PAGE = r"""<!doctype html>
     return `<div class="tab" ${attr}="${key}">${label}${b}${mn}</div>`;
   }
   function renderTabs() {
-    const buy = data.items.filter(i => i.qtd > 0);
+    const buy = data.items.filter(i => i.qtd > 0 && !i.comprado);  // já comprado não conta
     const cc = $('cattabs');
     cc.innerHTML = data.cats.map(c =>
       tabHTML('data-cat', c.key, `${c.icone} ${esc(c.label)}`, buy.filter(i => i.cat === c.key).length, true)).join('')
@@ -653,7 +692,8 @@ PAGE = r"""<!doctype html>
   function render() {
     if (!data.cats.length) { $('browser').classList.add('hide');
       $('list').innerHTML = '<div class="empty">Sem categorias.</div>'; return; }
-    const buy = data.items.filter(i => i.qtd > 0);
+    const buy = data.items.filter(i => i.qtd > 0 && !i.comprado);    // falta comprar
+    const bought = data.items.filter(i => i.qtd > 0 && i.comprado);  // já comprado (riscado)
     $('cartn').textContent = buy.length;
     $('browser').classList.toggle('hide', mode === 'lista');
     $('listhead').classList.toggle('hide', mode !== 'lista');
@@ -662,8 +702,8 @@ PAGE = r"""<!doctype html>
     const term = fold($('q').value.trim());
     const box = $('list');
     if (mode === 'lista') {
-      const f = buy.filter(i => !term || fold(i.nome).includes(term));
-      const act = f.filter(i => !i.comprado), done = f.filter(i => i.comprado);
+      const match = i => !term || fold(i.nome).includes(term);
+      const act = buy.filter(match), done = bought.filter(match);
       if (!act.length && !done.length) {
         box.innerHTML = '<div class="empty">🛒 Lista vazia. Marca o que precisas nas categorias.</div>';
       } else {
@@ -672,7 +712,7 @@ PAGE = r"""<!doctype html>
           return sub.length ? `<div class="grouptitle">${c.icone} ${esc(c.label)}</div>` + sub.map(rowAComprar).join('') : '';
         }).join('');
         if (!act.length) html += '<div class="empty">Tudo comprado! 🎉</div>';
-        if (done.length) html += `<div class="grouptitle done">✓ Já comprado (${done.length})</div>` + done.map(rowComprado).join('');
+        if (done.length) html += `<div class="grouptitle done">✓ Já comprado (${done.length}) · sai da lista ao fim de 24h</div>` + done.map(rowComprado).join('');
         box.innerHTML = html;
       }
     } else {

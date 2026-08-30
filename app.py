@@ -28,7 +28,7 @@ STRUCT_FILE = DATA_DIR / "structure.json"
 # Itens marcados como comprados saem da lista sozinhos ao fim de 24h.
 BOUGHT_TTL = 24 * 3600
 # Muda a cada deploy: as paginas abertas detectam e recarregam-se sozinhas.
-VERSION = "2026-08-30-c5"
+VERSION = "2026-08-30-c6"
 
 DEFAULT_CATS = [
     {"key": "fl", "label": "Frutas & Legumes", "icone": "🥦", "subs": [
@@ -484,6 +484,9 @@ PAGE = r"""<!doctype html>
     .badge { font-size:.7rem; font-weight:800; min-width:17px; text-align:center; padding:0 .28rem;
       border-radius:999px; background:var(--accent); color:#fff; }
     .tab.on .badge { background:#fff; color:var(--accent); }
+    .gbar { display:flex; gap:.5rem; align-items:center; margin:.9rem 0 0; }
+    .gbar .search { margin:0; }
+    .gmark { background:var(--accent-bg); color:var(--accent); border-radius:4px; padding:0 .12rem; font-weight:800; }
     .search { width:100%; padding:.6rem .85rem; font-size:1rem; border-radius:12px; margin:.9rem 0 .8rem;
       border:1px solid var(--border); background:var(--card); color:var(--text); box-shadow:var(--shadow); }
     .addbar { display:flex; gap:.5rem; margin-top:.9rem; }
@@ -543,6 +546,13 @@ PAGE = r"""<!doctype html>
     <h1>🛒 Compras</h1>
     <button id="cartbtn" class="cart">🛒 A comprar <span class="badge" id="cartn">0</span></button>
   </div>
+
+  <div class="gbar">
+    <input id="gq" class="search" type="search" autocomplete="off"
+           placeholder="🔎 Procurar em todo o catálogo…">
+    <button class="btn ghost hide" id="gclear" title="limpar pesquisa">✕</button>
+  </div>
+  <div id="gresults" class="hide"></div>
 
   <div id="browser">
     <div class="level">
@@ -721,12 +731,104 @@ PAGE = r"""<!doctype html>
     inp.addEventListener('blur', () => finish(true));
   }
 
+  // ---- pesquisa global: todas as categorias, tolerante a gralhas ----
+  function subseq(n, t) {  // as letras de t aparecem por ordem em n
+    let i = 0;
+    for (let k = 0; k < n.length && i < t.length; k++) if (n[k] === t[i]) i++;
+    return i === t.length;
+  }
+  function lev(a, b, max) {  // distância de edição (conta troca de letras como 1 erro)
+    if (Math.abs(a.length - b.length) > max) return max + 1;
+    let prev2 = null, prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      const cur = [i];
+      let min = i;
+      for (let j = 1; j <= b.length; j++) {
+        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+        if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1])
+          cur[j] = Math.min(cur[j], prev2[j - 2] + 1);  // letras trocadas
+        if (cur[j] < min) min = cur[j];
+      }
+      if (min > max) return max + 1;
+      prev2 = prev; prev = cur;
+    }
+    return prev[b.length];
+  }
+  function pontua(nome, tokens) {  // 0 = não serve; maior = mais relevante
+    const n = fold(nome), palavras = n.split(/[^a-z0-9]+/).filter(Boolean);
+    let total = 0;
+    for (const t of tokens) {
+      let p = 0;
+      if (n.startsWith(t)) p = 100;                              // começa igual
+      else if (palavras.some(w => w.startsWith(t))) p = 90;      // uma palavra começa igual
+      else if (t.length < 3) p = 0;                              // 1-2 letras: só início, senão é ruído
+      else if (n.includes(t)) p = 70;                            // aparece lá dentro
+      else {
+        const max = t.length <= 4 ? 1 : 2;                       // gralhas toleradas
+        let d = max + 1;
+        for (const w of palavras) {
+          d = Math.min(d, lev(t, w, max));
+          if (w.length > t.length) d = Math.min(d, lev(t, w.slice(0, t.length), max));
+        }
+        if (d <= max) p = 60 - d * 15;
+        // letras soltas mas pela ordem certa, dentro da MESMA palavra ("cbla" -> "cebolas")
+        else if (t.length >= 4 && palavras.some(w => subseq(w, t))) p = 20;
+      }
+      if (!p) return 0;  // tudo o que escreveste tem de bater em algum lado
+      total += p;
+    }
+    return total * 100 - nome.length;  // empate: nomes mais curtos primeiro
+  }
+  function realce(nome, tokens) {
+    const n = fold(nome);
+    let m = null;
+    for (const t of tokens) {
+      const i = n.indexOf(t);
+      if (i >= 0 && (!m || t.length > m.len)) m = { i, len: t.length };
+    }
+    if (!m) return esc(nome);
+    return esc(nome.slice(0, m.i)) + '<mark class="gmark">' + esc(nome.slice(m.i, m.i + m.len))
+         + '</mark>' + esc(nome.slice(m.i + m.len));
+  }
+  const GMAX = 60;
+  function renderGlobal(termo) {
+    const tokens = termo.split(/\s+/).filter(Boolean);
+    const res = [];
+    for (const it of data.items) { const p = pontua(it.nome, tokens); if (p) res.push({ it, p }); }
+    res.sort((a, b) => b.p - a.p);
+    const box = $('gresults');
+    if (!res.length) { box.innerHTML = '<div class="empty">Nada encontrado. 🤷</div>'; return; }
+    box.innerHTML = `<div class="grouptitle">${res.length} resultado${res.length > 1 ? 's' : ''}`
+      + (res.length > GMAX ? ` · mostro os ${GMAX} melhores` : '') + `</div>`
+      + res.slice(0, GMAX).map(r => `<div class="item ${r.it.qtd > 0 ? 'on' : ''}">
+        <div class="info jump" data-jump="${r.it.cat}|${r.it.sub}"><span class="nome">${realce(r.it.nome, tokens)}</span>
+          <div class="meta">${pathLabel(r.it)} ›</div></div>
+        ${stepHTML(r.it)}</div>`).join('');
+    box.querySelectorAll('[data-q]').forEach(b => b.onclick = () => {
+      const [id, dl] = b.dataset.q.split('|'); api('/api/items/qty', { id, delta: Number(dl) }); });
+    box.querySelectorAll('[data-jump]').forEach(el => el.onclick = () => {
+      const [c, s] = el.dataset.jump.split('|');
+      aCat = c; aSub = s; mode = 'cat'; $('gq').value = ''; render(); });
+  }
+
   function render() {
     if (!data.cats.length) { $('browser').classList.add('hide');
       $('list').innerHTML = '<div class="empty">Sem categorias.</div>'; return; }
     const buy = data.items.filter(i => i.qtd > 0 && !i.comprado);    // falta comprar
     const bought = data.items.filter(i => i.comprado);                // já comprado (riscado, qtd=0)
     $('cartn').textContent = buy.length;
+
+    const gterm = fold($('gq').value.trim());  // pesquisa global tem prioridade
+    $('gclear').classList.toggle('hide', !gterm);
+    $('gresults').classList.toggle('hide', !gterm);
+    $('q').classList.toggle('hide', !!gterm);
+    $('list').classList.toggle('hide', !!gterm);
+    if (gterm) {
+      $('browser').classList.add('hide');
+      $('listhead').classList.add('hide');
+      return renderGlobal(gterm);
+    }
+
     $('browser').classList.toggle('hide', mode === 'lista');
     $('listhead').classList.toggle('hide', mode !== 'lista');
 
@@ -796,7 +898,10 @@ PAGE = r"""<!doctype html>
     });
   }
 
-  $('cartbtn').onclick = () => { mode = mode === 'lista' ? 'cat' : 'lista'; render(); };
+  $('gq').addEventListener('input', render);
+  $('gq').addEventListener('keydown', e => { if (e.key === 'Escape') { $('gq').value = ''; render(); } });
+  $('gclear').onclick = () => { $('gq').value = ''; $('gq').focus(); render(); };
+  $('cartbtn').onclick = () => { $('gq').value = ''; mode = mode === 'lista' ? 'cat' : 'lista'; render(); };
   $('backbtn').onclick = () => { mode = 'cat'; render(); };
   $('clearbtn').onclick = () => { if (confirm('Limpar toda a lista de compras?')) api('/api/items/clear'); };
   $('q').addEventListener('input', render);

@@ -9,6 +9,9 @@ A ideia: em vez de reescrever sempre (como nos lembretes), os produtos ficam num
 (−/＋); depois das compras carregas em **Limpar lista** e o catálogo continua lá
 para a próxima.
 
+- **Pesquisa global** no topo: procura em todas as categorias à medida que escreves,
+  sem acentos e tolerante a gralhas (`frnago` encontra frango). A pesquisa de baixo
+  continua a filtrar só a subcategoria aberta.
 - Separadores **arrastáveis** (⠿) — a ordem fica guardada por dispositivo.
 - **Badges** mostram quantos itens **falta comprar** por categoria/subcategoria
   (o que já marcaste como comprado deixa de contar).

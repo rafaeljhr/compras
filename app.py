@@ -28,7 +28,7 @@ STRUCT_FILE = DATA_DIR / "structure.json"
 # Itens marcados como comprados saem da lista sozinhos ao fim de 24h.
 BOUGHT_TTL = 24 * 3600
 # Muda a cada deploy: as paginas abertas detectam e recarregam-se sozinhas.
-VERSION = "2026-08-30-c4"
+VERSION = "2026-08-30-c5"
 
 DEFAULT_CATS = [
     {"key": "fl", "label": "Frutas & Legumes", "icone": "🥦", "subs": [
@@ -166,18 +166,23 @@ def _valid(cats, cat, sub):
 
 
 def _expire_bought(items):
-    """Tira da lista os itens comprados há mais de 24h. Devolve True se mudou algo."""
+    """Normaliza os itens comprados e tira da lista os que já passaram das 24h."""
     now, changed = time.time(), False
     for it in items:
         if not it.get("comprado"):
             continue
         ts = it.get("comprado_em")
         if not isinstance(ts, (int, float)):
-            it["comprado_em"] = now  # item antigo sem carimbo: conta as 24h a partir de agora
+            ts = it["comprado_em"] = now  # sem carimbo: conta as 24h a partir de agora
             changed = True
-        elif now - ts >= BOUGHT_TTL:
-            it["qtd"], it["comprado"] = 0, False  # o produto fica no catálogo, sai só da lista
+        if int(it.get("qtd", 0) or 0) > 0:
+            # estado antigo (comprado mas ainda a contar como "por comprar")
+            it["qtd_comprado"], it["qtd"] = int(it["qtd"]), 0
+            changed = True
+        if now - ts >= BOUGHT_TTL:
+            it["comprado"] = False  # o produto fica no catálogo, sai só da lista riscada
             it.pop("comprado_em", None)
+            it.pop("qtd_comprado", None)
             changed = True
     return changed
 
@@ -230,10 +235,10 @@ def items_qty():
     for it in items:
         if it.get("id") == item_id:
             it["qtd"] = max(0, int(it.get("qtd", 0)) + delta)
-            # voltar a pedir (ou sair da lista) limpa o "comprado"
-            if delta > 0 or it["qtd"] == 0:
+            if delta > 0:  # voltar a pedir tira-o dos comprados
                 it["comprado"] = False
                 it.pop("comprado_em", None)
+                it.pop("qtd_comprado", None)
             break
     write_items(items)
     return jsonify(payload())
@@ -250,7 +255,11 @@ def items_bought():
             it["comprado"] = val
             if val:
                 it["comprado_em"] = time.time()  # marca a hora -> sai da lista em 24h
+                # sai já das categorias; guarda a quantidade para o ↩ a repor
+                it["qtd_comprado"] = max(1, int(it.get("qtd", 0) or 0))
+                it["qtd"] = 0
             else:
+                it["qtd"] = max(1, int(it.pop("qtd_comprado", 1) or 1))
                 it.pop("comprado_em", None)
             break
     write_items(items)
@@ -301,6 +310,7 @@ def items_clear():
         it["qtd"] = 0
         it["comprado"] = False
         it.pop("comprado_em", None)
+        it.pop("qtd_comprado", None)
     write_items(items)
     return jsonify(payload())
 
@@ -715,7 +725,7 @@ PAGE = r"""<!doctype html>
     if (!data.cats.length) { $('browser').classList.add('hide');
       $('list').innerHTML = '<div class="empty">Sem categorias.</div>'; return; }
     const buy = data.items.filter(i => i.qtd > 0 && !i.comprado);    // falta comprar
-    const bought = data.items.filter(i => i.qtd > 0 && i.comprado);  // já comprado (riscado)
+    const bought = data.items.filter(i => i.comprado);                // já comprado (riscado, qtd=0)
     $('cartn').textContent = buy.length;
     $('browser').classList.toggle('hide', mode === 'lista');
     $('listhead').classList.toggle('hide', mode !== 'lista');

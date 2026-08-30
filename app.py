@@ -28,7 +28,7 @@ STRUCT_FILE = DATA_DIR / "structure.json"
 # Itens marcados como comprados saem da lista sozinhos ao fim de 24h.
 BOUGHT_TTL = 24 * 3600
 # Muda a cada deploy: as paginas abertas detectam e recarregam-se sozinhas.
-VERSION = "2026-08-30-c3"
+VERSION = "2026-08-30-c4"
 
 DEFAULT_CATS = [
     {"key": "fl", "label": "Frutas & Legumes", "icone": "🥦", "subs": [
@@ -597,7 +597,7 @@ PAGE = r"""<!doctype html>
   function load() {
     if (paused) return;
     const my = ++seq;
-    fetch('/api/data').then(r => r.json()).then(p => {
+    fetch('/api/data?v=' + encodeURIComponent(VER)).then(r => r.json()).then(p => {
       if (my !== seq || paused) return;  // já há algo mais recente -> ignora
       if (p.ver && p.ver !== VER) return bumpVersion(p.ver);
       data = p; fixActive(); render();
